@@ -1,224 +1,223 @@
 import os
 import csv
 from scapy.all import rdpcap, TCP, UDP, ICMP, IP
-from collections import defaultdict
-from datetime import datetime
 
 
 class Flow:
-    """Clase para representar un flujo de tráfico"""
-    
-    def __init__(self, flow_id, src_ip, src_port, dst_ip, dst_port, protocol, timestamp):
-        self.flow_id = flow_id
-        self.src_ip = src_ip
-        self.src_port = src_port
-        self.dst_ip = dst_ip
-        self.dst_port = dst_port
+    def __init__(self, ip_dst, port_dst, ip_src, port_src, protocol):
+        self.ip_src = ip_src
+        self.ip_dst = ip_dst
+        self.port_src = port_src
+        self.port_dst = port_dst
         self.protocol = protocol
-        self.start_time = timestamp
-        self.end_time = timestamp
-        
-        # Características del flujo
-        self.packet_count = 0
-        self.total_bytes = 0
-        self.tcp_flags = set()
-        self.is_closed = False
-        self.payload_bytes = 0
-        self.min_ttl = float('inf')
-        self.max_ttl = 0
-        
-    def add_packet(self, packet, packet_size):
-        """Añade un paquete al flujo"""
-        self.packet_count += 1
-        self.total_bytes += packet_size
-        self.end_time = packet.time if hasattr(packet, 'time') else self.end_time
-        
-        # Extraer TTL si está disponible
-        if IP in packet:
-            ip_layer = packet[IP]
-            ttl = ip_layer.ttl
-            self.min_ttl = min(self.min_ttl, ttl)
-            self.max_ttl = max(self.max_ttl, ttl)
-            
-            # Calcular payload (datos de aplicación)
-            payload_size = len(packet) - len(ip_layer)
-            self.payload_bytes += max(0, payload_size)
-        
-        # Extraer flags TCP si está disponible
+        self.packets = 0
+        self.bytes = 0
+        self.closed = False  
+        # Start and end times are in Unix timestamp format (seconds since epoch 1970-01-01 00:00:00 UTC)
+        self.start_time = None
+        self.end_time = None
+
+    def add_packet(self, packet):
+        '''
+        Add a packet to the flow, updating packet and byte counts, and tracking start/end times.
+        '''
+        self.packets += 1
+        self.bytes += len(packet) 
+
+        # The timestamp updates the flow's start and end times to calculate duration later
+        # The value of ts updates for each packet.
+        # i.e: packet 1 has ts=0.001, packet 2 has ts=0.002, packet 3 has ts=0.003, etc.
+        ts = float(packet.time)  # Packet timestamp
+        if self.start_time is None or ts < self.start_time:
+            # The start_time corresponds with the first or earliest packet
+            self.start_time = ts
+        if self.end_time is None or ts > self.end_time:
+            # The end_time corresponds with the last or latest packet
+            self.end_time = ts
+
+        # Detect TCP flow closure by checking for FIN or RST flags
         if TCP in packet:
-            tcp_layer = packet[TCP]
-            flags = tcp_layer.flags
-            self.tcp_flags.add(flags)
-            
-            # Verificar si el flujo debe cerrarse (FIN o RST)
-            if flags & 0x01 or flags & 0x04:  # FIN = 0x01, RST = 0x04
-                self.is_closed = True
-    
-    def get_duration(self):
-        """Calcula la duración del flujo en segundos"""
-        if isinstance(self.start_time, float) and isinstance(self.end_time, float):
+            flags = packet[TCP].flags
+            # 'F' = FIN, 'R' = RST
+            if 'F' in str(flags) or 'R' in str(flags):
+                self.closed = True
+
+    def duration(self):
+        # In seconds
+        if self.start_time is not None and self.end_time is not None:
             return self.end_time - self.start_time
-        return 0
-    
+        return 0.0
+
+    def avg_packet_size(self):
+        return self.bytes / self.packets if self.packets > 0 else 0.0
+
+    def key(self):
+        '''
+        Returns the 5-tuple that identifies the flow
+        '''
+        return (self.ip_src, self.ip_dst, self.port_src, self.port_dst, self.protocol)
+
     def to_dict(self):
-        """Convierte el flujo a un diccionario"""
+        # Used for the later CSV export
         return {
-            'flow_id': self.flow_id,
-            'src_ip': self.src_ip,
-            'src_port': self.src_port,
-            'dst_ip': self.dst_ip,
-            'dst_port': self.dst_port,
-            'protocol': self.protocol,
-            'start_time': datetime.fromtimestamp(self.start_time).isoformat() if isinstance(self.start_time, float) else str(self.start_time),
-            'duration_seconds': round(self.get_duration(), 4),
-            'packet_count': self.packet_count,
-            'total_bytes': self.total_bytes,
-            'payload_bytes': self.payload_bytes,
-            'avg_packet_size': round(self.total_bytes / self.packet_count, 2) if self.packet_count > 0 else 0,
-            'min_ttl': self.min_ttl if self.min_ttl != float('inf') else 'N/A',
-            'max_ttl': self.max_ttl,
-            'tcp_flags': str(self.tcp_flags) if self.tcp_flags else 'N/A',
-            'is_closed': self.is_closed
+            "start_time": round(self.start_time, 4) if self.start_time is not None else None,
+            "end_time": round(self.end_time, 4) if self.end_time is not None else None,
+            "ip_dst": self.ip_dst,
+            "port_dst": self.port_dst,
+            "ip_src": self.ip_src,
+            "port_src": self.port_src,
+            "protocol": self.protocol,
+            "packets": self.packets,
+            "bytes": self.bytes,
+            "avg_pkt_size": round(self.avg_packet_size(), 2),
+            "duration_s": round(self.duration(), 4),
+            "closed": self.closed,
         }
 
+# It's the same as the one in tagging.py, but we include it here for modularity
+def classify_protocol(packet):
+    if ICMP in packet:
+        return "ICMP"
+    if TCP in packet:
+        sport = packet[TCP].sport
+        dport = packet[TCP].dport
+        if sport == 443 or dport == 443:
+            return "HTTPS"
+        if sport == 80 or dport == 80:
+            return "HTTP"
+        return "TCP"
+    if UDP in packet:
+        sport = packet[UDP].sport
+        dport = packet[UDP].dport
+        if sport == 53 or dport == 53:
+            return "DNS"
+        return "UDP"
+    return "Otro"
 
-def get_flow_id(packet):
+
+def get_flow_key(packet):
     """
-    Genera un identificador único para un flujo basado en:
-    (IP origen, puerto origen, IP destino, puerto destino, protocolo)
+    Obtains the 5-tuple key for a packet to identify its flow.
+    Returns None if the packet doesn't have an IP layer.
+    The tuple format is: (IP_dst, port_dst, IP_src, port_src, protocol)
     """
     if IP not in packet:
         return None
-    
-    ip_layer = packet[IP]
-    src_ip = ip_layer.src
-    dst_ip = ip_layer.dst
-    protocol = ip_layer.proto
-    
-    # Determinar puertos según el protocolo
-    src_port = None
-    dst_port = None
-    
+
+    ip_src = packet[IP].src
+    ip_dst = packet[IP].dst
+    # The protocol is determined by the presence of TCP, UDP, or ICMP layers and their ports
+    protocol = classify_protocol(packet)
+
     if TCP in packet:
-        src_port = packet[TCP].sport
-        dst_port = packet[TCP].dport
-        protocol_name = 'TCP'
+        port_src = packet[TCP].sport
+        port_dst = packet[TCP].dport
     elif UDP in packet:
-        src_port = packet[UDP].sport
-        dst_port = packet[UDP].dport
-        protocol_name = 'UDP'
-    elif ICMP in packet:
-        src_port = 0
-        dst_port = 0
-        protocol_name = 'ICMP'
+        port_src = packet[UDP].sport
+        port_dst = packet[UDP].dport
     else:
-        src_port = 0
-        dst_port = 0
-        protocol_name = f'Other({protocol})'
-    
-    # Crear ID: (src_ip, src_port, dst_ip, dst_port, protocolo)
-    flow_id = f"{src_ip}:{src_port} -> {dst_ip}:{dst_port} [{protocol_name}]"
-    
-    return flow_id, src_ip, src_port, dst_ip, dst_port, protocol_name
+        # ICMP and others do not have ports
+        port_src = 0
+        port_dst = 0
+
+    return (ip_dst, port_dst, ip_src, port_src, protocol)
 
 
-def extract_flows(pcap_file):
+def aggregate_flows(pcap_file):
     """
-    Extrae los flujos de tráfico del archivo .pcap
+    Reads a pcap file and aggregates packets into flows.
+    TCP flows are closed upon detecting FIN/RST and a new one is created
+    if the same 5-tuple reappears after closure.
     """
-    try:
-        packets = rdpcap(pcap_file)
-        print(f"Se cargaron {len(packets)} paquetes\n")
-    except Exception as e:
-        print(f"Error al cargar el archivo: {e}")
-        return []
-    
-    active_flows = {}  # Diccionario de flujos activos
-    closed_flows = []  # Lista de flujos cerrados
-    
+    packets = rdpcap(pcap_file)
+    flows = {}  # key -> Flow
+
     for packet in packets:
-        flow_info = get_flow_id(packet)
-        
-        if flow_info is None:
+        # (ip_src, ip_dst, port_src, port_dst, protocol)
+        key = get_flow_key(packet)
+        if key is None:
             continue
-        
-        flow_id, src_ip, src_port, dst_ip, dst_port, protocol = flow_info
-        packet_size = len(packet)
-        
-        # Verificar si el flujo ya existe
-        if flow_id not in active_flows:
-            # Crear nuevo flujo
-            flow = Flow(flow_id, src_ip, src_port, dst_ip, dst_port, protocol, packet.time)
-            active_flows[flow_id] = flow
-        
-        # Añadir el paquete al flujo
-        flow = active_flows[flow_id]
-        flow.add_packet(packet, packet_size)
-        
-        # Verificar si el flujo debe cerrarse
-        if flow.is_closed:
-            closed_flows.append(active_flows.pop(flow_id))
-    
-    # Los flujos que siguen activos al final de la captura también se cierran
-    closed_flows.extend(active_flows.values())
-    
-    print(f"Se extrajeron {len(closed_flows)} flujos de tráfico\n")
-    
-    return closed_flows
+
+        # If the flow was already closed, create a new one
+        if key in flows and flows[key].closed:
+            # Save the closed flow with a unique key (e.g., by appending an index)
+            closed_flow = flows.pop(key)
+            # Rename the key to store it as closed
+            idx = 1
+            # *key flattens the tuple key into individual elements for the new key
+            while (*key, idx) in flows:
+                idx += 1
+            flows[(*key, idx)] = closed_flow
+
+        if key not in flows:
+            flows[key] = Flow(*key)
+
+        flows[key].add_packet(packet)
+
+    return list(flows.values())
 
 
-def save_flows_to_csv(flows, output_file):
-    """
-    Guarda los flujos en un archivo CSV
-    """
-    if not flows:
-        print("No hay flujos para guardar")
-        return
-    
-    try:
-        # Obtener las claves del primer flujo
-        fieldnames = list(flows[0].to_dict().keys())
-        
-        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            
-            for flow in flows:
-                writer.writerow(flow.to_dict())
-        
-        print(f"Flujos guardados en: {output_file}")
-        
-    except Exception as e:
-        print(f"Error al guardar el archivo CSV: {e}")
+def export_csv(flows, output_path):
+    fieldnames = [
+        "start_time", "end_time",
+        "ip_dst", "port_dst", "ip_src", "port_src",
+        "protocol", "packets", "bytes", "avg_pkt_size",
+        "duration_s", "closed",
+    ]
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for flow in flows:
+            writer.writerow(flow.to_dict())
+    print(f"\nCSV exported to: {output_path}")
 
 
-def main():
-    # Obtener la ruta del directorio donde está este script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    pcap_file = os.path.join(script_dir, "capture.pcap")
-    output_file = os.path.join(script_dir, "flows.csv")
-    
-    # Extraer flujos
-    flows = extract_flows(pcap_file)
-    
-    # Mostrar estadísticas
-    print(f"{'='*70}")
-    print("ESTADÍSTICAS DE FLUJOS")
-    print(f"{'='*70}")
-    print(f"Total de flujos: {len(flows)}")
-    
-    # Contar flujos por protocolo
-    protocol_counts = defaultdict(int)
-    for flow in flows:
-        protocol_counts[flow.protocol] += 1
-    
-    print("\nFlujos por protocolo:")
-    for protocol, count in protocol_counts.items():
-        print(f"  {protocol}: {count}")
-    
-    # Guardar flujos en CSV
-    save_flows_to_csv(flows, output_file)
+def print_stats(flows):
+    total_packets = sum(f.packets for f in flows)
+    total_bytes = sum(f.bytes for f in flows)
+    closed_count = sum(1 for f in flows if f.closed)
+    open_count = len(flows) - closed_count
+
+    print("=" * 60)
+    print("           FLOW STATISTICS")
+    print("=" * 60)
+    print(f"  Total flows:              {len(flows)}")
+    print(f"  Total packets:            {total_packets:,}")
+    print(f"  Total bytes:              {total_bytes:,}")
+    print(f"  Closed flows (FIN/RST):   {closed_count}")
+    print(f"  Open flows:               {open_count}")
+    print("=" * 60)
+
+    # Protocol distribution
+    protocol_counts = {}
+    for f in flows:
+        # Key: protocol name, Value: count of flows using that protocol
+        protocol_counts[f.protocol] = protocol_counts.get(f.protocol, 0) + 1
+    print("\n  Flows by protocol:")
+    # Sort protocols by count in descending order and print them
+    for proto, count in sorted(protocol_counts.items(), key=lambda x: -x[1]):
+        print(f"    {proto:>8}: {count}")
+
+    # Top 3 flows by bytes
+    sorted_flows = sorted(flows, key=lambda f: f.bytes, reverse=True)
+    print("\n  Top 3 flows by data volume:")
+    print(f"  {'#':<4} {'Source IP':<18} {'Destination IP':<18} {'SP':>6} {'DP':>6} {'Proto':<6} {'Pkts':>7} {'Bytes':>12} {'Avg':>10}")
+    print("  " + "-" * 92)
+    for i, f in enumerate(sorted_flows[:3], 1):
+        print(
+            f"  {i:<4} {f.ip_src:<18} {f.ip_dst:<18} {f.port_src:>6} {f.port_dst:>6} "
+            f"{f.protocol:<6} {f.packets:>7,} {f.bytes:>12,} {f.avg_packet_size():>10,.2f}"
+        )
+    print()
 
 
 if __name__ == "__main__":
-    main()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    pcap_file = os.path.join(script_dir, "capture.pcap")
+    csv_file = os.path.join(script_dir, "flows.csv")
+
+    print(f"Reading capture: {pcap_file}")
+    flows = aggregate_flows(pcap_file)
+
+    print_stats(flows)
+    export_csv(flows, csv_file)
