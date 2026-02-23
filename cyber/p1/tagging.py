@@ -62,6 +62,7 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     pcap_file = os.path.join(script_dir, "capture.pcap")
     labeled_packets = label_packets(pcap_file)
+    
     print_labeled_packets(labeled_packets)
 
 

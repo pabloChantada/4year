@@ -1,6 +1,11 @@
+<<<<<<< HEAD
 */.DS_Store
 */.vscode
 */.idea
 */.vs
 */.cache
 */.pytest_cache
+=======
+*/*.zip
+.venv
+>>>>>>> 0f238eab4e444248ec2e42c4b19ef0c9b76054b9

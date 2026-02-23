@@ -1,29 +1,132 @@
-\section{Captura y análisis de tráfico}
+\documentclass[12pt,a4paper]{article}
 
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{booktabs}
+
+\geometry{margin=2.5cm}
+
+\title{Práctica 1 – Análisis y Etiquetado de Tráfico de Red}
+\author{Pablo Chantada Saborido}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Captura y Análisis de Tráfico (Wireshark)}
+
+Utilizando Wireshark para la captura de paquetes (\texttt{archivo .pcap}), podemos analizar el flujo de datos de nuestra red (WiFi en este caso). A continuación, se muestran diferentes capturas del tráfico. Durante el proceso de captura estaban abiertas diversas aplicaciones como: Steam, Firefox, y otras en segundo plano como los controladores de ASUS.
+
+\subsection{Tráfico hacia ASUS (ARP)}
+
+Se observó tráfico ARP (Figura \ref{asus}) (proceso de conectar una dirección IP dinámica a la dirección MAC de una máquina física) generado por el hardware ASUS, en el que se puede apreciar la resolución de direcciones MAC a direcciones IP locales. De esta forma no solo sabemos la dirección IP de nuestro dispositivo, sino también que nuestra placa base u otros componentes son de ASUS. Esto podría permitir \textit{exploits} de vulnerabilidades de la marca, similar a lo ocurrido con los chips \href{https://www.incibe.es/en/incibe-cert/publications/cybersecurity-highlights/researchers-discover-new-flaws-intel-cpus-enable-memory-leaks-and-spectre-v2}{Intel}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=1\textwidth]{imgs/asus.png}
+\caption{Captura de tráfico ARP – ASUS}
+\label{asus}
+\end{figure}
+
+\subsection{Tráfico hacia Google (DNS)}
+
+Se capturó una respuesta DNS (Figura \ref{google}) para el dominio \texttt{clients3.google.com}, que incluye un registro CNAME (sirve para crear un alias de un dominio hacia otro dominio) y la dirección IP resuelta (\texttt{216.58.215.174}). En este caso vemos que el CNAME pasa del dominio \texttt{clients3.google.com} a \texttt{clients.l.google.com}, para terminar la resolución a la IP real.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=1\textwidth]{imgs/google.png}
+\caption{Captura de tráfico DNS – Google}
+\label{google}
+\end{figure}
+
+\subsection{Tráfico hacia Steam (DNS)}
+
+Se capturó una consulta DNS (Figura \ref{steam}) de tipo AAAA (apunta un dominio o subdominio a una dirección IPv6, igual que el A lo hace a una IPv4) para el dominio \texttt{store.steampowered.com}, correspondiente a la plataforma Steam. Este tráfico, además, se realizó usando la aplicación de Steam y no la página web. Es posible que ciertos paquetes estén presentes en la app y no en la web, pero el funcionamiento (debería) ser el mismo.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=1\textwidth]{imgs/steam.png}
+\caption{Captura de tráfico DNS – Steam}
+\label{steam}
+\end{figure}
+
+\subsection{Creación del dataset}
+Con la captura actual, no se debería crear un dataset público. Como se menciona anteriormente, podemos discernir componentes del sistema, direcciones IP, aplicaciones \footnote{En el caso de Steam, en 2025 se  \href{https://mashable.com/article/89-million-steam-accounts-leaked-change-your-password}{filtraron 90 millones de cuentas}. Permitiendo a un atacante exprimir vulnerabilidades similares}, etc. Si quisiéramos generar un dataset público con la captura, deberíamos ocultar las IPs privadas, componentes, aplicaciones que puedan presentar vulnerabilidades, etc.
+
+\subsection{Intercepción de Credenciales en Texto Plano}
+
+La web utilizada para demostrar las vulnerabilidades de \textbf{HTTP} contra \textbf{HTTPS} fue \href{http://testphp.vulnweb.com/signup.php}{testphp.vulnweb.com/signup.php}, ya que los datos enviados por el usuario no viajan cifrados (Figura \ref{password}).
+
+Tras completar el registro, el servidor devuelve una página de confirmación que muestra en claro todos los datos introducidos por el usuario (Figura \ref{login}), incluyendo contraseña y número de tarjeta de crédito:
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=1\textwidth]{imgs/vulnweb.png}
+\caption{Página de confirmación de registro en VulnWeb}
+\label{login}
+\end{figure}
+
+Al analizar la captura con Wireshark, inspeccionamos el paquete \texttt{HTTP POST} y podemos observar directamente las credenciales de registro. En el panel resaltado (Figura \ref{password}) se puede ver el formulario con todos los campos enviados (\texttt{uname}, \texttt{upass}, \texttt{ucc}, \texttt{uemail}, \texttt{uphone}, \texttt{uaddress}):
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=1\textwidth]{imgs/wireshark_web.png}
+\caption{Wireshark – Intercepción del POST HTTP con credenciales en texto plano}
+\label{password}
+\end{figure}
+
+Esto demuestra el grave riesgo de seguridad que supone no implementar protocolos de cifrado (TLS) en formularios de autenticación, permitiendo a cualquier atacante en la red local (ataques \textit{Man-in-the-Middle}) obtener las cuentas de los usuarios, siempre y cuando obtengan el paquete en la conversación entre el servidor y el usuario.
+
+\section{Extracción y Generación de Flujos de Tráfico}
+
+El script \texttt{traffic.py} agrupa los paquetes individuales en \textbf{flujos de tráfico}.
+
+Un flujo se define mediante una lista de 5 elementos:
+
+\begin{verbatim}
+[IP Origen, IP Destino, Puerto Origen, Puerto Destino, Protocolo]
+\end{verbatim}
+
+Iterando sobre la captura podemos, usando el puerto de origen y destino, identificar a qué tipo de tráfico corresponde (HTTP: puerto 80, HTTPS: puerto 443, DNS: puerto 53). Los paquetes restantes se identifican como ICMP \footnote{Los mensajes del Internet Control Message Protocol no precisan de puertos, al ser un protocolo de capa 3 va directamente en la IP, sin necesidad de multiplexar servicios.} o como otros.
+
+
+\section{Análisis Cuantitativo de Flujos (\texttt{flows.csv})}
+
+Los flujos se mantuvieron abiertos acumulando paquetes y solo se cerraron al detectar banderas de finalización o reseteo (\textbf{flags FIN o RST}). Esta lógica asegura que, si dos máquinas se comunican por los mismos puertos de forma repetida pero en momentos distintos (tras un cierre de conexión), se contabilicen como flujos separados.
+
+El análisis estadístico de esta captura permite extraer los siguientes datos globales:
 
 \begin{itemize}
-    \item ¿Qué podrías saber sobre tu ordenador (navegador, sistema operativo, IP, ...)
-    \item ¿Qué información podrías obtener sobre tu actividad en Internet (páginas visitadas, servicios usados, ...)?
-    \item ¿Sería adecuado utilizar esta captura, tal como está, para crear un dataset de acceso público? Razona la respuesta
+  \item \textbf{Total de flujos registrados:} 56
+  \item \textbf{Volumen total de tráfico:} 6.428 paquetes procesados, sumando un total de \textbf{8.284.303 bytes} transferidos.
+  \item \textbf{Estado de las conexiones:} De los 56 flujos, solo \textbf{13} se cerraron correctamente (capturando la finalización de la conexión), mientras que \textbf{43} flujos permanecían abiertos en el momento en que se detuvo la captura de tráfico.
 \end{itemize}
 
-De nuestro ordenador obtenemos esta informacion por ejemplo:
+Al analizar los flujos con mayor volumen de datos (Top 3), observamos que todos corresponden (posiblemente) a descargas o recepciones de contenido pesado desde la misma IP remota (\texttt{151.101.135.52}, puerto \texttt{443} – HTTPS) hacia puertos dinámicos de nuestra máquina local (\texttt{192.168.1.138}):
 
-\begin{figure}[H]
-    \centering
-    \includegraphics[width=0.8\textwidth]{imgs/asus.png}
-    \caption{Captura de tráfico con Wireshark}
-    \label{fig:wireshark}
-\end{figure}
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lllll@{}}
+\toprule
+Ranking & Puerto local & Paquetes & Bytes totales & Tamaño medio por paquete \\ \midrule
+1º & 65095 & 3.526 & 5.132.277 bytes & 1.455,55 bytes \\
+2º & 65094 & 1.676 & 2.424.014 bytes & 1.446,31 bytes \\
+3º & 65093 & 117 & 138.192 bytes & 1.181,13 bytes \\ \bottomrule
+\end{tabular}
+\caption{Top 3 flujos con mayor volumen de datos}
+\end{table}
 
-Indicando la IP de nuestro ordenador y que utilizamos ASUS, que corresponde con la tarejeta grafica.
+El hecho de que el tamaño medio de los paquetes en los flujos principales esté tan cercano a los \textbf{1500 bytes} (MTU estándar de Ethernet) indica que la red estaba aprovechando al máximo la capacidad del canal para transferir archivos o flujos multimedia pesados, seguramente correspondientes a una descarga.
 
-En cuanto a la actividad en Internet, se pueden observar las páginas visitadas, los servicios usados, etc. 
-Por ejemplo, observamos que accedimos a google y steam: 
+\section{Conclusión y Aplicación en Ciberseguridad}
 
-\begin{figure}[H]
-    \centering
-    \includegraphics[width=0.8\textwidth]{imgs/steam.png}
-    \caption{Captura de tráfico con Wireshark}
-    \label{fig:wireshark2}
-\end{figure}
+La práctica demuestra cómo los datos sin cifrar son interceptables y la facilidad para generar conjuntos de datos orientados a Machine Learning. A diferencia del análisis de un solo paquete aislado (que apenas nos revela IPs, puertos u otros datos simples), evaluar una conversación completa extrayendo métricas de flujo (como la duración, el recuento total de paquetes, la tasa de bytes transferidos o el comportamiento de los \textit{flags} TCP) nos proporciona características fundamentales sobre el comportamiento de la red.
+
+Son precisamente estas métricas las que ayudarían a un modelo a identificar anomalías, clasificar el tipo de tráfico (por ejemplo, diferenciar un flujo de streaming de una descarga directa) o detectar ciberataques (como escaneos de puertos o denegaciones de servicio).
+
+\end{document}
