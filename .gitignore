@@ -10,3 +10,4 @@ agents/plots/data_agents.csv
 agents/plots/data_model.csv
 agents/kowloon/__pycache__/agent.cpython-314.pyc
 agents/kowloon/__pycache__/model.cpython-314.pyc
+**/*.exe
