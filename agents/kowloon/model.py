@@ -5,8 +5,8 @@ from agent import BaseAgent
 '''
 TODO: MODULARIZAR CORRECTAMENTE, LOS CHECK SOLO DEBERIAN COMPROBAR
 NO EJECUTAR NADA, SOLO DEVOLVER UNA LISTA DE AGENTES A REPRODUCIR O ELIMINAR
-
 '''
+
 class KowloonModel(mesa.Model):
     def __init__(self, width=200, height=200, num_agents=100):
         super().__init__()

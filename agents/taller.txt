@@ -1,0 +1,2 @@
+- instalar llama.cpp para segregacion o depredador presa
+- un llm que usa las acciones para realizar el modelo
